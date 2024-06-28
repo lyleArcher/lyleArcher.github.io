@@ -1,11 +1,173 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    <h1>hello</h1>
-</body>
-</html>
+<h2>RocketMQ搭建</h2>
+<h3>前言</h3>
+<p>搭建前需要先介绍一下rocketMQ的基本组织架构(自己手画的哈，我觉得还行)</p>
+<p><img src="G:\lyleSpace\essay\image\image-20210611191110134.png" referrerpolicy="no-referrer" alt="image-20210611191110134"></p>
+<p>&nbsp;</p>
+<p><strong>name server:名服务，你可以理解成注册中心或者路由服务</strong></p>
+<p>		主要是用来发现和保存 broker的路由信息、生产服务和消费服务的信息</p>
+<p><strong>broker:消息存储和消费的服务</strong></p>
+<p>		用来接受生产者发送的消息，保存这些消息，生产者可以消费这些消息</p>
+<p><strong>producer:消息生产者</strong></p>
+<p>		发送消息到broker中,路由由name-server提供</p>
+<p><strong>consumer:消息消费者</strong></p>
+<p>		消费 broker中的消息,有主动消费和推送消费两种方式</p>
+<p><strong>management:管理平台</strong></p>
+<p>		ui化的rocketmq监控和管理平台，可有可无</p>
+<p>&nbsp;</p>
+<p>从上面可以看出核心的服务就是 name-server 和 broker 所以，我们需要在服务器端搭建这两个服务</p>
+<h3>docker搭建</h3>
+<h4>name-server</h4>
+<p>拉取镜像</p>
+<pre><code class='language-shell' lang='shell'>docker pull rocketmqinc/rocketmq:4.4.0 
+</code></pre>
+<p>启动名服务</p>
+<pre><code class='language-shell' lang='shell'>docker run --name rmqnamesrv -d -p 9876:9876 rocketmqinc/rocketmq:latest sh mqnamesrv
+</code></pre>
+<p><em>-- name: 容器名别名</em></p>
+<p><em>-d :后台运行</em></p>
+<p><em>-p :端口映射</em></p>
+<p><em>sh 脚本别名</em></p>
+<h4>broker</h4>
+<p>拉取镜像</p>
+<p><em>和上面的name-server是同一个镜像</em></p>
+<p>启动broker</p>
+<pre><code class='language-shell' lang='shell'>docker run --name rmqbroker -d -p 10911:10911 -p 10909:10909    --link rmqnamesrv:namesrv -e &quot;NAMESRV_ADDR=namesrv:9876&quot; rocketmqinc/rocketmq:4.4.0 sh mqbroker
+</code></pre>
+<p><em>-- link 添加链接到另一个容器 前面是要链接的名称，后面是起的别名</em></p>
+<p>如果说你的 name-server 和 broker 不在同一个机器上,那就无需指定 --link，-e 中的 namesrv换成 name-server 的实际 ip地址</p>
+<p><strong>注:这里有个坑,至于是啥坑，等你搭建完用的时候就会发现，然后你再回来看下面的解决方案，会记忆深刻点</strong></p>
+<h4>management(可跳过)</h4>
+<p>拉取镜像</p>
+<pre><code class='language-shell' lang='shell'>docker pull pangliang/rocketmq-console-ng:latest
+</code></pre>
+<p>启动服务</p>
+<pre><code class='language-shell' lang='shell'>docker run --name rmqconsole -d -p 18080:8080 --link rmqnamesrv:namesrv -e &quot;JAVA_OPTS=-Drocketmq.namesrv.addr=namesrv:9876&quot;  pangliang/rocketmq-console-ng
+</code></pre>
+<p>然后你就可以访问你的管理平台,里面如果可以看见broker 和 namesrv 那就表示服务搭建成功</p>
+<p>&nbsp;</p>
+<h4>坑</h4>
+<p>服务正常启动，但是java代码连接报错</p>
+<p><em>org.apache.rocketmq.remoting.exception.RemotingTooMuchRequestException: sendDefaultImpl call timeout</em></p>
+<p><em>但是看服务器上的服务是正常运行的，管理平台也显示正常</em></p>
+<p>原因:broker在容器中的默认的ip地址是容器内网地址,所以外网是访问不到的</p>
+<p>解决: </p>
+<p><em>方法一：</em></p>
+<p>先启动容器，并指定配置文件</p>
+<pre><code class='language-shell' lang='shell'>docker run --name rmqbroker -d -p 10911:10911 -p 10909:10909    --link rmqnamesrv:namesrv -e &quot;NAMESRV_ADDR=namesrv:9876&quot; rocketmqinc/rocketmq:latest sh mqbroker -c ../conf/broker.conf
+</code></pre>
+<p>然后进入容器修改配置文件 </p>
+<pre><code class='language-shell' lang='shell'>docker exec -it db28e7d494db bash
+</code></pre>
+<pre><code class='language-shell' lang='shell'>vi /opt/rocketmq-4.4.0/conf/broker.conf 
+</code></pre>
+<p>添加参数</p>
+<p><strong>brokerIP1</strong> = 服务部署的外网ip</p>
+<p>然后重启服务</p>
+<pre><code class='language-shell' lang='shell'>docker restart db28e7d494db
+</code></pre>
+<p>方法二:</p>
+<p>新建一个rocketmq的文件夹目录,新建conf文件夹,新建broker.conf文件</p>
+<pre><code>brokerClusterName = DefaultCluster
+brokerName = broker-a
+brokerId = 0
+deleteWhen = 04
+fileReservedTime = 48
+brokerRole = ASYNC_MASTER
+flushDiskType = ASYNC_FLUSH
+brokerIP1=edgclearlove.top
+</code></pre>
+<p>使用外部配置文件启动服务</p>
+<pre><code class='language-shell' lang='shell'>docker run --name rmqbroker -d -p 10911:10911 -p 10909:10909 -v 你刚才添加的broker.conf文件路径:/opt/rocketmq-4.4.0/conf/broker.conf    --link rmqnamesrv:namesrv -e &quot;NAMESRV_ADDR=namesrv:9876&quot; rocketmqinc/rocketmq:latest sh mqbroker -c ../conf/broker.conf
+</code></pre>
+<h3>java代码测试</h3>
+<p>依赖引入</p>
+<pre><code class='language-xml' lang='xml'>        &lt;!-- https://mvnrepository.com/artifact/org.apache.rocketmq/rocketmq-spring-boot-starter --&gt;
+        &lt;dependency&gt;
+            &lt;groupId&gt;org.apache.rocketmq&lt;/groupId&gt;
+            &lt;artifactId&gt;rocketmq-spring-boot-starter&lt;/artifactId&gt;
+            &lt;version&gt;2.1.1&lt;/version&gt;
+        &lt;/dependency&gt;
+</code></pre>
+<h4><strong>producer</strong></h4>
+<p>配置文件</p>
+<pre><code class='language-properties' lang='properties'>#名服务地址
+rocketmq.name-server=服务ip地址:9876
+
+#生产者所属分组
+rocketmq.producer.group=myGroup1
+</code></pre>
+<p>业务代码</p>
+<pre><code class='language-java' lang='java'>@RestController
+@RequestMapping(&quot;/message/send&quot;)
+public class MessageSendController {
+
+    @Resource
+   private RocketMQTemplate rocketMQTemplate;
+
+    @GetMapping(&quot;/simple&quot;)
+    public String sendMessage(@RequestParam(&quot;message&quot;) String message){
+
+        long currentTime=System.currentTimeMillis();
+
+        rocketMQTemplate.convertAndSend(&quot;rocket-topic-1&quot;,message+&quot;|&quot;+currentTime);
+
+        return &quot;发送成功&quot;+currentTime;
+    }
+
+    @GetMapping(&quot;/tag&quot;)
+    public String sendMessage2(@RequestParam(&quot;tag&quot;) String tag,@RequestParam(&quot;message&quot;) String message){
+        long currentTime=System.currentTimeMillis();
+
+        rocketMQTemplate.convertAndSend(&quot;rocket-topic-1:&quot;+tag,message+&quot;|&quot;+currentTime);
+
+        return &quot;发送成功&quot;+currentTime;
+    }
+}
+</code></pre>
+<h4><strong>consumer</strong></h4>
+<p>配置文件</p>
+<pre><code class='language-properties' lang='properties'>rocketmq.name-server=服务ip地址:9876
+</code></pre>
+<p>业务代码</p>
+<pre><code class='language-java' lang='java'>import lombok.extern.slf4j.Slf4j;
+import org.apache.rocketmq.spring.annotation.ConsumeMode;
+import org.apache.rocketmq.spring.annotation.MessageModel;
+import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
+import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
+
+@Slf4j
+@Component
+public class RocketMQConsumer {
+
+
+    @Service
+    @RocketMQMessageListener(consumerGroup = &quot;consumer-group-1&quot;,topic = &quot;rocket-topic-1&quot;)
+    public class RocketMQConsumerListener1 implements RocketMQListener&lt;String&gt; {
+
+        @Override
+        public void onMessage(String message) {
+            log.info(&quot;我消费了消息&quot; +message);
+        }
+    }
+
+
+    @Service
+    @RocketMQMessageListener(consumerGroup = &quot;consumer-group-1&quot;,topic = &quot;rocket-topic-1&quot;,selectorExpression = &quot;tag1&quot;,messageModel = MessageModel.BROADCASTING,consumeMode = ConsumeMode.ORDERLY)
+    public class RocketMQConsumerListener2 implements RocketMQListener&lt;String&gt; {
+
+        @Override
+        public void onMessage(String message) {
+            log.info(&quot;我消费了消息&quot; +message);
+        }
+    }
+
+
+}
+</code></pre>
+<p>如果可以正常发送和接收消息则表示正常</p>
+<h3>参考文档</h3>
+<p><a href='https://github.com/apache/rocketmq'>rocketmq github</a></p>
+<p><a href='https://zebinh.github.io/2020/07/RocketMQDeploymentWithSpringBootDemo/'>docker安装部署rocketmq和SpringBoot小实例</a></p>
+<p><a href='https://blog.csdn.net/qq_41322100/article/details/104490051'>docker安装rocketmq遇到的坑（外部无法连接）</a></p>
